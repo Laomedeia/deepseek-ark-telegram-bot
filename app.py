@@ -3,7 +3,7 @@ import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
-from chat import handle_message
+from chat import handle_message, handle_message_stream
 
 # Configure logging
 logging.basicConfig(
@@ -31,12 +31,22 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Received message from user {user_id}: {user_message}")
     
     try:
-        response = await handle_message(user_message, user_id)
-        logger.info(f"Sending response to user {user_id}: {response[:20]}...")
-        await update.message.reply_text(response)
+        # Send initial response that will be updated
+        response_message = await update.message.reply_text("思考中...")
+        collected_message = ""
+
+        async for content in handle_message_stream(user_message, user_id):
+            collected_message += content
+            if len(collected_message) % 50 == 0:  # Update every ~50 characters
+                await response_message.edit_text(collected_message)
+        
+        # Final update with complete message
+        if collected_message:
+            await response_message.edit_text(collected_message)
+        
     except Exception as e:
         logger.error(f"Error handling message: {str(e)}")
-        await update.message.reply_text("Sorry, something went wrong. Please try again.")
+        await update.message.reply_text("抱歉，出现了一些问题。请重试。")
 
 def main():
     # Create application with token from environment

@@ -13,7 +13,7 @@ load_dotenv()
 # Initialize the OpenAI client
 client = OpenAI(
     api_key=os.getenv("ARK_API_KEY"),
-    base_url="https://ark.cn-beijing.volces.com/api/v3"
+    base_url="https://ark.cn-beijing.volces.com/api/v3/bots/"
 )
 
 # Get max tokens from environment or use default
@@ -55,7 +55,7 @@ async def handle_message(message: str, user_id: str = "default") -> str:
         response = await loop.run_in_executor(
             executor,
             lambda: client.chat.completions.create(
-                model="deepseek-r1-250120",
+                model="bot-20250220004350-rhlnb",
                 messages=messages
             )
         )
@@ -67,14 +67,64 @@ async def handle_message(message: str, user_id: str = "default") -> str:
             "content": assistant_message
         })
 
-        # Keep only last N messages to prevent context from growing too large
-        if len(conversations[user_id]) > 10:
-            conversations[user_id] = conversations[user_id][-10:]
-            logger.info(f"Trimmed conversation history for user {user_id}")
-
         logger.info(f"Successfully processed message for user {user_id}")
         return assistant_message
 
     except Exception as e:
         logger.error(f"Error in handle_message for user {user_id}: {str(e)}")
         raise  # Re-raise the exception to be handled by the caller
+
+async def handle_message_stream(message: str, user_id: str = "default"):
+    """
+    Process the incoming message and yield responses using DeepSeek API streaming
+    """
+    try:
+        logger.info(f"Processing message for user {user_id}")
+        
+        # Initialize or get user's conversation history
+        if user_id not in conversations:
+            logger.info(f"Initializing new conversation for user {user_id}")
+            conversations[user_id] = []
+        
+        # Add user message to history
+        conversations[user_id].append({
+            "role": "user",
+            "content": message
+        })
+
+        # Prepare messages for API call
+        messages = [
+            {"role": "system", "content": "你是一个友好的AI助手, 帮助我解决编程和生活方面的问题"},
+            *conversations[user_id]
+        ]
+
+        logger.info(f"Sending streaming request to DeepSeek API for user {user_id}")
+        # Run the streaming API call
+        loop = asyncio.get_event_loop()
+        stream = await loop.run_in_executor(
+            executor,
+            lambda: client.chat.completions.create(
+                model="bot-20250220004350-rhlnb",
+                messages=messages,
+                stream=True
+            )
+        )
+
+        full_response = ""
+        for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content is not None:
+                content = chunk.choices[0].delta.content
+                full_response += content
+                yield content
+
+        # Add complete response to conversation history
+        conversations[user_id].append({
+            "role": "assistant",
+            "content": full_response
+        })
+
+        logger.info(f"Successfully processed streaming message for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in handle_message_stream for user {user_id}: {str(e)}")
+        raise
