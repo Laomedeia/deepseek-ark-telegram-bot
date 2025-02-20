@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
@@ -25,35 +26,67 @@ telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
 if not telegram_token:
     raise Exception("TELEGRAM_BOT_TOKEN must be set in environment variables")
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle errors caused by updates."""
+    logger.error(f"Update {update} caused error {context.error}")
+    if update.message:
+        await update.message.reply_text("很抱歉，处理您的消息时出现了错误，请稍后重试。")
+
 async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    user_id = str(update.effective_user.id)
-    logger.info(f"Received message from user {user_id}: {user_message}")
-    
+    """Handle incoming chat messages"""
     try:
-        # Send initial response that will be updated
+        if not update.message or not update.message.text or not update.message.text.strip():
+            await update.message.reply_text("请发送有效的文本消息。")
+            return
+
+        user_message = update.message.text.strip()
+        user_id = str(update.effective_user.id)
+        logger.info(f"Received message from user {user_id}: {user_message}")
+        
         response_message = await update.message.reply_text("思考中...")
         collected_message = ""
+        last_update_time = asyncio.get_event_loop().time()
+        update_interval = 1.0  # Update every 1 second
 
-        async for content in handle_message_stream(user_message, user_id):
-            collected_message += content
-            if len(collected_message) % 50 == 0:  # Update every ~50 characters
-                await response_message.edit_text(collected_message)
-        
-        # Final update with complete message
-        if collected_message:
-            await response_message.edit_text(collected_message)
-        
+        try:
+            async for content in handle_message_stream(user_message, user_id):
+                collected_message += content
+                current_time = asyncio.get_event_loop().time()
+                
+                # Update message if enough time has passed and we have content
+                if (current_time - last_update_time >= update_interval and 
+                    collected_message.strip()):
+                    try:
+                        await response_message.edit_text(collected_message)
+                        last_update_time = current_time
+                    except Exception as e:
+                        logger.warning(f"Failed to update message: {e}")
+            
+            # Final update with complete message
+            if collected_message.strip():
+                try:
+                    await response_message.edit_text(collected_message)
+                except Exception as e:
+                    logger.warning(f"Failed to send final message: {e}")
+            else:
+                await response_message.edit_text("抱歉，无法生成回复，请重试。")
+                
+        except Exception as e:
+            logger.error(f"Streaming error: {str(e)}")
+            await response_message.edit_text("抱歉，处理消息时出现错误，请重试。")
+            
     except Exception as e:
-        logger.error(f"Error handling message: {str(e)}")
-        await update.message.reply_text("抱歉，出现了一些问题。请重试。")
+        logger.error(f"Chat handling error: {str(e)}")
+        if update.message:
+            await update.message.reply_text("抱歉，处理消息时出现错误，请重试。")
 
 def main():
     # Create application with token from environment
     application = Application.builder().token(telegram_token).build()
 
-    # Add handler for all text messages
+    # Add handlers
     application.add_handler(MessageHandler(filters.TEXT, handle_chat))
+    application.add_error_handler(error_handler)
 
     # Start the bot
     logger.info("Bot started. Press Ctrl+C to stop.")
