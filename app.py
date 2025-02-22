@@ -45,27 +45,41 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         response_message = await update.message.reply_text("思考中...")
         collected_message = ""
+        reasoning_message = ""
         last_update_time = asyncio.get_event_loop().time()
         update_interval = 1.0  # Update every 1 second
 
         try:
             async for content in handle_message_stream(user_message, user_id):
-                collected_message += content
                 current_time = asyncio.get_event_loop().time()
                 
-                # Update message if enough time has passed and we have content
-                if (current_time - last_update_time >= update_interval and 
-                    collected_message.strip()):
+                if content.startswith("[推理过程]"):
+                    reasoning_message += content[7:]  # Remove the prefix
+                else:
+                    collected_message += content
+                
+                # Update message if enough time has passed
+                if current_time - last_update_time >= update_interval:
                     try:
-                        await response_message.edit_text(collected_message)
+                        display_text = ""
+                        if reasoning_message:
+                            display_text += f"🤔 推理过程:\n{reasoning_message}\n\n"
+                        if collected_message:
+                            display_text += f"🤖 回答:\n{collected_message}"
+                            
+                        await response_message.edit_text(display_text)
                         last_update_time = current_time
                     except Exception as e:
                         logger.warning(f"Failed to update message: {e}")
             
-            # Final update with complete message
+            # Final update
             if collected_message.strip():
                 try:
-                    await response_message.edit_text(collected_message)
+                    final_text = ""
+                    if reasoning_message:
+                        final_text += f"🤔 推理过程:\n{reasoning_message}\n\n"
+                    final_text += f"🤖 回答:\n{collected_message}"
+                    await response_message.edit_text(final_text)
                 except Exception as e:
                     logger.warning(f"Failed to send final message: {e}")
             else:

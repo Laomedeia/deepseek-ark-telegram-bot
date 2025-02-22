@@ -122,25 +122,37 @@ async def handle_message_stream(message: str, user_id: str = "default"):
         
         # Create streaming request
         stream = client.chat.completions.create(
-            model="bot-20250220004350-rhlnb",  # 使用你的模型 endpoint ID
+            model="bot-20250220004350-rhlnb",
             messages=messages,
             stream=True
         )
 
         full_response = ""
+        reasoning_content = ""
+        
         for chunk in stream:
             if not chunk.choices:
                 continue
-            content = chunk.choices[0].delta.content
-            if content:
-                full_response += content
-                yield content
+                
+            delta = chunk.choices[0].delta
+            
+            # Handle reasoning content
+            if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                reasoning_content += delta.reasoning_content
+                yield f"[推理过程] {delta.reasoning_content}"
+            
+            # Handle regular content
+            if hasattr(delta, 'content') and delta.content:
+                full_response += delta.content
+                yield delta.content
 
         # Only add to history if we got a response
         if full_response:
+            # Store both reasoning and response in history
             conversations[user_id].append({
                 "role": "assistant",
-                "content": full_response
+                "content": full_response,
+                "reasoning": reasoning_content
             })
             logger.info(f"Successfully processed streaming message for user {user_id}")
         else:
