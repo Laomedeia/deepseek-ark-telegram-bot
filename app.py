@@ -49,6 +49,26 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         last_update_time = asyncio.get_event_loop().time()
         update_interval = 1.0  # Update every 1 second
 
+        def split_message(text, max_length=4000):
+            """Split message into chunks that respect Telegram's length limit"""
+            messages = []
+            current_message = ""
+            
+            for line in text.split('\n'):
+                if len(current_message) + len(line) + 1 > max_length:
+                    messages.append(current_message)
+                    current_message = line
+                else:
+                    if current_message:
+                        current_message += '\n' + line
+                    else:
+                        current_message = line
+            
+            if current_message:
+                messages.append(current_message)
+            
+            return messages
+
         try:
             async for content in handle_message_stream(user_message, user_id):
                 current_time = asyncio.get_event_loop().time()
@@ -66,8 +86,22 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             display_text += f"🤔 推理过程:\n{reasoning_message}\n\n"
                         if collected_message:
                             display_text += f"🤖 回答:\n{collected_message}"
+                        
+                        # Split message if it's too long
+                        messages = split_message(display_text)
+                        
+                        # Update or send messages
+                        if len(messages) == 1:
+                            await response_message.edit_text(messages[0])
+                        else:
+                            # If we need multiple messages, delete the original and send new ones
+                            await response_message.delete()
+                            for i, msg_part in enumerate(messages):
+                                if i == 0:
+                                    response_message = await update.message.reply_text(msg_part)
+                                else:
+                                    await update.message.reply_text(msg_part)
                             
-                        await response_message.edit_text(display_text)
                         last_update_time = current_time
                     except Exception as e:
                         logger.warning(f"Failed to update message: {e}")
@@ -79,7 +113,16 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if reasoning_message:
                         final_text += f"🤔 推理过程:\n{reasoning_message}\n\n"
                     final_text += f"🤖 回答:\n{collected_message}"
-                    await response_message.edit_text(final_text)
+                    
+                    # Split and send final message
+                    messages = split_message(final_text)
+                    await response_message.delete()
+                    for i, msg_part in enumerate(messages):
+                        if i == 0:
+                            response_message = await update.message.reply_text(msg_part)
+                        else:
+                            await update.message.reply_text(msg_part)
+                            
                 except Exception as e:
                     logger.warning(f"Failed to send final message: {e}")
             else:
