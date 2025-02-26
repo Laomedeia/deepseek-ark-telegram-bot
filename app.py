@@ -48,7 +48,8 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reasoning_message = ""
         last_update_time = asyncio.get_event_loop().time()
         update_interval = 2.0  # Update interval in seconds
-        current_parts = []  # Track current message parts
+        message_parts = [response_message]  # Track message objects
+        current_texts = ["思考中..."]  # Track message texts
         
         def split_message(text, max_length=4000):
             """Split message into chunks that respect Telegram's length limit"""
@@ -70,41 +71,29 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             return messages
 
-        async def update_messages(new_parts):
+        async def update_messages(new_texts):
             """Update messages incrementally"""
-            nonlocal current_parts, response_message
+            nonlocal message_parts, current_texts
             
-            # Only update if content has changed
-            if new_parts == current_parts:
-                return
-
             try:
-                # If this is our first message or only one part
-                if len(new_parts) == 1:
-                    await response_message.edit_text(new_parts[0])
-                else:
-                    # For multiple parts
-                    # Update existing parts
-                    for i, (current, new) in enumerate(zip(current_parts, new_parts)):
-                        if current != new:
-                            if i == 0:
-                                await response_message.edit_text(new)
-                            else:
-                                await current_parts[i].edit_text(new)
-                    
-                    # Add any new parts
-                    if len(new_parts) > len(current_parts):
-                        for new_part in new_parts[len(current_parts):]:
-                            msg = await update.message.reply_text(new_part)
-                            current_parts.append(msg)
-                
-                current_parts = new_parts
-                
+                # Update existing messages
+                for i in range(min(len(message_parts), len(new_texts))):
+                    if current_texts[i] != new_texts[i]:
+                        await message_parts[i].edit_text(new_texts[i])
+                        current_texts[i] = new_texts[i]
+
+                # Add new messages if needed
+                while len(message_parts) < len(new_texts):
+                    msg = await update.message.reply_text(new_texts[len(message_parts)])
+                    message_parts.append(msg)
+                    current_texts.append(new_texts[len(message_parts) - 1])
+
             except Exception as e:
-                logger.debug(f"Failed to update messages: {e}")
+                logger.warning(f"Failed to update messages: {e}")
                 await asyncio.sleep(1)
 
         try:
+            buffer = ""
             async for content in handle_message_stream(user_message, user_id):
                 current_time = asyncio.get_event_loop().time()
                 
@@ -112,18 +101,20 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reasoning_message += content[7:]
                 else:
                     collected_message += content
+                    buffer += content
                 
                 # Update messages if enough time has passed
-                if current_time - last_update_time >= update_interval:
+                if current_time - last_update_time >= update_interval and buffer:
                     display_text = ""
                     if reasoning_message:
                         display_text += f"🤔 推理过程:\n{reasoning_message}\n\n"
                     if collected_message:
                         display_text += f"🤖 回答:\n{collected_message}"
                     
-                    new_parts = split_message(display_text)
-                    await update_messages(new_parts)
+                    new_texts = split_message(display_text)
+                    await update_messages(new_texts)
                     last_update_time = current_time
+                    buffer = ""  # Clear buffer after update
             
             # Final update
             if collected_message.strip():
@@ -132,8 +123,8 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     final_text += f"🤔 推理过程:\n{reasoning_message}\n\n"
                 final_text += f"🤖 回答:\n{collected_message}"
                 
-                final_parts = split_message(final_text)
-                await update_messages(final_parts)
+                final_texts = split_message(final_text)
+                await update_messages(final_texts)
             else:
                 await response_message.edit_text("抱歉，无法生成回复，请重试。")
                 
