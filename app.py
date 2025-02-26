@@ -47,7 +47,8 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         collected_message = ""
         reasoning_message = ""
         last_update_time = asyncio.get_event_loop().time()
-        update_interval = 1.0  # Update every 1 second
+        update_interval = 2.0  # Increase update interval to 2 seconds
+        messages_sent = []  # Track sent messages
 
         def split_message(text, max_length=4000):
             """Split message into chunks that respect Telegram's length limit"""
@@ -69,12 +70,31 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             return messages
 
+        async def safe_delete_message(message):
+            """Safely delete a message"""
+            try:
+                await message.delete()
+            except Exception as e:
+                logger.debug(f"Failed to delete message: {e}")
+
+        async def safe_send_message(text):
+            """Safely send a message with rate limiting"""
+            try:
+                msg = await update.message.reply_text(text)
+                messages_sent.append(msg)
+                await asyncio.sleep(0.1)  # Small delay between messages
+                return msg
+            except Exception as e:
+                logger.warning(f"Failed to send message: {e}")
+                await asyncio.sleep(1)  # Longer delay if error occurs
+                return None
+
         try:
             async for content in handle_message_stream(user_message, user_id):
                 current_time = asyncio.get_event_loop().time()
                 
                 if content.startswith("[推理过程]"):
-                    reasoning_message += content[7:]  # Remove the prefix
+                    reasoning_message += content[7:]
                 else:
                     collected_message += content
                 
@@ -87,24 +107,43 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if collected_message:
                             display_text += f"🤖 回答:\n{collected_message}"
                         
-                        # Split message if it's too long
                         messages = split_message(display_text)
                         
-                        # Update or send messages
-                        if len(messages) == 1:
-                            await response_message.edit_text(messages[0])
-                        else:
-                            # If we need multiple messages, delete the original and send new ones
-                            await response_message.delete()
+                        # Clean up old messages if we need to send multiple new ones
+                        if len(messages) > 1:
+                            for msg in messages_sent:
+                                await safe_delete_message(msg)
+                            messages_sent.clear()
+                            await safe_delete_message(response_message)
+                            
+                            # Send new messages
                             for i, msg_part in enumerate(messages):
                                 if i == 0:
-                                    response_message = await update.message.reply_text(msg_part)
+                                    response_message = await safe_send_message(msg_part)
+                                    if response_message:
+                                        messages_sent = [response_message]
                                 else:
-                                    await update.message.reply_text(msg_part)
+                                    msg = await safe_send_message(msg_part)
+                                    if msg:
+                                        messages_sent.append(msg)
+                        else:
+                            # Try to edit existing message
+                            try:
+                                await response_message.edit_text(messages[0])
+                            except Exception as e:
+                                logger.debug(f"Failed to edit message: {e}")
+                                # If edit fails, send as new message
+                                await safe_delete_message(response_message)
+                                response_message = await safe_send_message(messages[0])
+                                if response_message:
+                                    messages_sent = [response_message]
                             
                         last_update_time = current_time
+                        await asyncio.sleep(0.5)  # Add delay between updates
+                        
                     except Exception as e:
                         logger.warning(f"Failed to update message: {e}")
+                        await asyncio.sleep(1)  # Add delay if error occurs
             
             # Final update
             if collected_message.strip():
@@ -114,23 +153,28 @@ async def handle_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         final_text += f"🤔 推理过程:\n{reasoning_message}\n\n"
                     final_text += f"🤖 回答:\n{collected_message}"
                     
-                    # Split and send final message
                     messages = split_message(final_text)
-                    await response_message.delete()
+                    
+                    # Clean up all previous messages
+                    for msg in messages_sent:
+                        await safe_delete_message(msg)
+                    await safe_delete_message(response_message)
+                    
+                    # Send final messages
+                    messages_sent = []
                     for i, msg_part in enumerate(messages):
-                        if i == 0:
-                            response_message = await update.message.reply_text(msg_part)
-                        else:
-                            await update.message.reply_text(msg_part)
+                        msg = await safe_send_message(msg_part)
+                        if msg:
+                            messages_sent.append(msg)
                             
                 except Exception as e:
                     logger.warning(f"Failed to send final message: {e}")
             else:
-                await response_message.edit_text("抱歉，无法生成回复，请重试。")
+                await safe_send_message("抱歉，无法生成回复，请重试。")
                 
         except Exception as e:
             logger.error(f"Streaming error: {str(e)}")
-            await response_message.edit_text("抱歉，处理消息时出现错误，请重试。")
+            await safe_send_message("抱歉，处理消息时出现错误，请重试。")
             
     except Exception as e:
         logger.error(f"Chat handling error: {str(e)}")
